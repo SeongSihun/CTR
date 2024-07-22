@@ -152,8 +152,8 @@ class Molecule():
 		self.RJ = self.structure[:,1:]
 		#
 		self.map = self.LatticeMap()
-		self.rmap   = self.ReciprocalSpace()
 		self.volume = np.linalg.det(self.map)
+		self.rmap   = self.ReciprocalSpace()
 	def __call__(self, *args): return self, args
 	##
 	def LatticeMap(self): # [a b c]

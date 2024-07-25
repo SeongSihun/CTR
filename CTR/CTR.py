@@ -184,9 +184,9 @@ class Molecule():
 	##
 	def SF(self, Q, E):
 		aff = vec(*[atom.aff(Q, E) for atom in self.atoms])
-		phase = (1j * self.RJ @ self.map @ Q.T).astype(dtype=complex)
-		# phase = (2j * pi * self.RJ @ HKL.T).astype(dtype=complex)
-		return sum(aff * exp(phase))
+		phase = Q @ (1j * self.map @ self.RJ.T).astype(dtype=complex)
+		# phase = (1j * self.RJ @ self.map @ Q.T).astype(dtype=complex)
+		return sum(aff * exp(phase.T))
 	def __mul__(self, tup):
 		tup = vec(*tup)
 		abc = self.abc * tup
@@ -255,7 +255,7 @@ class Film():
 	def __truediv__(self, substrate):
 		# Film/Sample
 		if 'Sample' in str(substrate.__class__):
-			return Sample(self, *substrate.FILMS, nref=substrate.nref)
+			return Sample(self, *substrate.film, nref=substrate.nref)
 		else:   # Film/Film
 			return Sample(self, substrate, nref=None)
 	def __or__(self, xray): 
@@ -265,67 +265,65 @@ class Film():
 	def SN(self, Q): # X = Q @ molecule.abc
 		# IX = 1j * Q * self.molecule.abc
 		IX = 1j *  Q @ self.molecule.map
-		Noinf = np.where(self.N == inf, 0, self.N)
-		Noinf = np.where(Noinf == -inf, 0, Noinf)
-		NUM = np.where(exp(IX)==1, Noinf, 1-exp(IX*Noinf))
-		# bulk film
-		NUM = np.where(self.N ==  inf,  1, NUM)
-		# bulk substrate
-		NUM = np.where(self.N == -inf, -1, NUM)
-		DEN = np.where(exp(IX)==1, 1, 1-exp(IX))
+		# Numerator
+		Nz = np.where(np.isinf(self.N), 0, self.N)
+		NUM = np.where(np.isinf(self.N), -1, 1-exp(Nz * IX))
+		NUM = np.where(1==exp(IX), Nz, NUM)
+		# Denominator
+		DEN = np.where(1==exp(IX), 1, 1-exp(IX))
 		return np.prod(NUM/DEN, axis=1)
 	#
 	def F(self, Q, E=Xray().Energy): return self.molecule.SF(Q, E) * self.SN(Q)
 	def I(self, Q, E=Xray().Energy): return np.abs(self.F(Q, E)) ** 2
 
 class RoughCut(Film):
-	def __init__(self, molecule, N, nref, beta):
+	def __init__(self, molecule, N, beta, nref=(0,0,0)):
 		super().__init__(molecule, N)
 		self.nref = vec(*nref)
 		self.beta = beta
+		
 	def SN(self, Q): # X = Q @ molecule.abc
 		# IX = 1j * Q * self.molecule.abc
 		IX = 1j *  Q @ self.molecule.map
 		expIX = exp(IX)
-		Noinf = np.where(self.N == inf, 0, self.N)
-		NUM = np.where(expIX==1, Noinf, 1-exp(IX*Noinf))
+		Nz = np.where(np.isinf(self.N), 0, self.N)
+		NUM = np.where(expIX==1, Nz, 1-exp(IX*Nz))
 		NUM = np.where(self.N == inf, -1, NUM)
 		DEN = np.where(expIX==1, 1, 1-expIX)
 		# Roughness
-		NUMR = exp(Noinf * self.nref) * np.where(self.beta * expIX==1, -1, self.beta * expIX)
+		NUMR = exp(Nz * self.nref) * np.where(self.beta * expIX==1, -1, self.beta * expIX)
 		DENR = np.where(self.beta * expIX==1, 1, 1-self.beta*expIX)
 		return np.prod(NUM/DEN + NUMR/DENR, axis=1)
-#
+
 class Sample():
-	def __init__(self, *films, nref):
-		self.FILMS = films
-		self.substrate = films[-1]
-		self.film = films[0:-1][::-1]
+	def __init__(self, *film, nref):
+		self.film = film
 		self.nref = nref
+		# Roughness nref set
+		if 'Rough' in str(self.film[0].__class__):
+			self.film[0].nref = nref
 	def __truediv__(self, substrate):
 		# Sample/Sample
 		if 'Sample' in str(substrate.__class__):
-			return Sample(*self.FILMS, *substrate.FILMS, nref=substrate.nref)
+			return Sample(*self.film, *substrate.film, nref=substrate.nref)
 		else:	# Sample/Film
-			return Sample(*self.FILMS, substrate, nref=None)
+			return Sample(*self.film, substrate, nref=None)
 	# def __or__(self, xray): return self.I(xray.q, xray.Energy)
 	def __or__(self, xray):
 		I = xray.I(self)
 		return I/np.max(I)
 
 	#
-	def F(self, Q, E=Xray().Energy):
-		F = self.substrate.F(Q, E)
+	def F(self, Q, E):
+		F = np.zeros(len(Q)).astype(dtype=complex)
 		PHI = np.zeros_like(Q).astype(dtype=complex)
 		for film in self.film:
-			# IX  = 1j * Q * film.molecule.abc
-			IX = 1j *  Q @ self.molecule.map
-			# print('phase : ', IX[10])
 			expNIX = np.prod(exp(PHI), axis=1)
 			F += (expNIX * film.F(Q, E))
-			Noinf = np.where(film.N==inf, 0, film.N)
-			Noinf = np.where(film.N==-inf, 0, Noinf)
-			PHI += IX * (Noinf * self.nref)
+			Nz = np.where(np.isinf(film.N), 0, film.N)
+			# Nz = np.where(film.N==-inf, 0, Nz)
+			IX = 1j *  Q @ film.molecule.map
+			PHI += IX * (Nz * self.nref)
 		return vec(*F)
 	#
 	def I(self, Q, E=Xray().Energy): return np.abs(self.F(Q, E)) ** 2

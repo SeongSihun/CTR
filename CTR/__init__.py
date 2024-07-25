@@ -1,8 +1,8 @@
 import numpy as np
 
-print("=========")
+# print("=========")
 print(" CTR v2")
-print("=========")
+# print("=========")
 
 pi   = np.pi
 inf  = np.inf
